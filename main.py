@@ -1,5 +1,6 @@
+import io
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import NameObject, BooleanObject
 
@@ -7,148 +8,19 @@ app = FastAPI()
 
 # ---------------------------
 # DATOS FIJOS DE ANDES SCD
+# (Luego los leemos desde tu Excel/base de datos)
 # ---------------------------
-ANDES_BASE = {
-    # Ajusta estos valores con tus datos reales (NIT, dirección, banco, etc.)
+ANDES = {
     "empresa_nombre": "ANDES SERVICIO DE CERTIFICACION DIGITAL S A S",
-    "empresa_nit": "900000000-0",
-    "empresa_email": "info@andesscd.com.co",
-    "empresa_telefono": "6012415539",
-    "rep_principal_nombre": "REPRESENTANTE LEGAL PRINCIPAL",
-    "rep_suplente_nombre": "REPRESENTANTE LEGAL SUPLENTE",
-    "rep_principal_email": "info@andesscd.com.co",
-    "rep_suplente_email": "info@andesscd.com.co",
-    "rep_principal_telefono": "6012415539",
-    "rep_suplente_telefono": "6012415539",
+    "nit": "900000000-0",
+    "email": "info@andesscd.com.co",
+    "telefono": "6012415539",
+    "rep_principal": "REPRESENTANTE LEGAL PRINCIPAL",
+    "rep_suplente": "REPRESENTANTE LEGAL SUPLENTE",
 }
 
-def get_actor(module: str) -> dict:
-    module = (module or "").upper().strip()
-    if module == "EJECUTIVOS":
-        return {
-            "rep_nombre": ANDES_BASE["rep_principal_nombre"],
-            "rep_email": ANDES_BASE["rep_principal_email"],
-            "rep_telefono": ANDES_BASE["rep_principal_telefono"],
-        }
-    if module == "CONTACT_CENTER":
-        return {
-            "rep_nombre": ANDES_BASE["rep_suplente_nombre"],
-            "rep_email": ANDES_BASE["rep_suplente_email"],
-            "rep_telefono": ANDES_BASE["rep_suplente_telefono"],
-        }
-    raise HTTPException(status_code=400, detail="module debe ser EJECUTIVOS o CONTACT_CENTER")
-
 def ensure_need_appearances(writer: PdfWriter):
-    # Hace que muchos visores "pinten" el texto en campos rellenados
-    if "/AcroForm" not in writer._root_object:
-        return
-    acro = writer._root_object["/AcroForm"]
-    acro.update({NameObject("/NeedAppearances"): BooleanObject(True)})
-
-def fill_pdf_form(pdf_bytes: bytes, values: dict) -> bytes:
-    reader = PdfReader(io_bytes(pdf_bytes))
-    writer = PdfWriter()
-
-    # Copiar páginas
-    for page in reader.pages:
-        writer.add_page(page)
-
-    # Copiar acroform si existe
-    if reader.trailer["/Root"].get("/AcroForm"):
-        writer._root_object.update(
-            {NameObject("/AcroForm"): reader.trailer["/Root"]["/AcroForm"]}
-        )
-
-    ensure_need_appearances(writer)
-
-    # Llenar campos si existen
-    # NOTA: esto solo funciona si el PDF tiene campos de formulario (rellenable)
-    for page in writer.pages:
-        writer.update_page_form_field_values(page, values)
-
-    out = bytes_out(writer)
-    return out
-
-# -------- helpers sin dependencias extra --------
-import io
-
-def io_bytes(b: bytes) -> io.BytesIO:
-    return io.BytesIO(b)
-
-def bytes_out(writer: PdfWriter) -> bytes:
-    buf = io.BytesIO()
-    writer.write(buf)
-    return buf.getvalue()
-
-@app.get("/")
-def home():
-    return {"message": "Andes SCD API funcionando"}
-
-@app.post("/generate")
-async def generate(
-    module: str = Form(...),   # EJECUTIVOS o CONTACT_CENTER
-    file: UploadFile = File(...)
-):
-    actor = get_actor(module)
-
-    filename = file.filename or "documento"
-    ext = filename.lower().split(".")[-1]
-
-    raw = await file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Archivo vacío")
-
-    # Valores que intentaremos mapear a campos del PDF
-    # (Luego lo hacemos inteligente con mapeos por formato)
-    values = {
-        "NOMBRE_EMPRESA": ANDES_BASE["empresa_nombre"],
-        "NIT": ANDES_BASE["empresa_nit"],
-        "EMAIL": ANDES_BASE["empresa_email"],
-        "TELEFONO": ANDES_BASE["empresa_telefono"],
-        "REPRESENTANTE": actor["rep_nombre"],
-        "REP_EMAIL": actor["rep_email"],
-        "REP_TELEFONO": actor["rep_telefono"],
-    }
-
-    # MVP: solo PDFs rellenables
-    if ext != "pdf":
-        raise HTTPException(
-            status_code=400,
-            detail="MVP: por ahora solo PDF rellenable. Luego activamos Word/Excel."
-        )
-
-    # Intentar leer campos para validar si es rellenable
-    reader = PdfReader(io_bytes(raw))
-    fields = reader.get_fields()
-    if not fields:
-        raise HTTPException(
-            status_code=400,
-            detail="Este PDF no tiene campos rellenables (probable escaneado o no-form). Requiere configuración especial."
-        )
-
-    # IMPORTANTE: Los nombres de campo reales NO son "NIT" etc.
-    # En producción, mapearemos: campo_del_pdf -> valor
-    # Por ahora, llenamos SOLO si el PDF tiene esos nombres exactamente.
-    filled_pdf = fill_pdf_form(raw, values)
-
-    out_name = f"ANDES_{module}_{filename.rsplit('.',1)[0]}.pdf"
-    return Response(
-        content=filled_pdf,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{out_name}"'
-        }
-    )
-from fastapi.responses import JSONResponse
-import io
-from pypdf import PdfReader, PdfWriter
-
-import io
-from fastapi.responses import Response, JSONResponse
-from pypdf import PdfReader, PdfWriter
-from pypdf.generic import NameObject, BooleanObject
-
-def _ensure_need_appearances(writer: PdfWriter):
+    """Hace que el visor (Chrome/Adobe) renderice los valores sin regenerar fuentes."""
     try:
         if "/AcroForm" in writer._root_object:
             acro = writer._root_object["/AcroForm"]
@@ -156,6 +28,11 @@ def _ensure_need_appearances(writer: PdfWriter):
     except Exception:
         pass
 
+@app.get("/")
+def home():
+    return {"status": "API Andes SCD funcionando"}
+
+# 1) ENDPOINT: ver campos reales del PDF
 @app.post("/fields")
 async def fields(file: UploadFile = File(...)):
     raw = await file.read()
@@ -163,6 +40,7 @@ async def fields(file: UploadFile = File(...)):
     f = reader.get_fields() or {}
     return {"count": len(f), "fields": list(f.keys())}
 
+# 2) ENDPOINT: debug para etiquetar campos (sin crashear por fuentes)
 @app.post("/debug/label")
 async def debug_label(file: UploadFile = File(...)):
     raw = await file.read()
@@ -176,41 +54,87 @@ async def debug_label(file: UploadFile = File(...)):
         )
 
     writer = PdfWriter()
-
-    # Copiar páginas
     for page in reader.pages:
         writer.add_page(page)
 
-    # Copiar AcroForm si existe
     acro = reader.trailer["/Root"].get("/AcroForm")
     if acro:
         writer._root_object.update({NameObject("/AcroForm"): acro})
 
-    _ensure_need_appearances(writer)
+    ensure_need_appearances(writer)
 
-    # Llenar cada campo con su propio nombre (corto para que quepa)
-    label_map = {k: (k[:28]) for k in fields.keys()}
+    label_map = {k: k[:28] for k in fields.keys()}  # corto para que quepa
 
     for page in writer.pages:
-        try:
-            writer.update_page_form_field_values(
-                page,
-                label_map,
-                auto_regenerate=False
-            )
-        except TypeError:
-            writer.update_page_form_field_values(page, label_map)
+        # CLAVE: evitar error /DescendantFonts
+        writer.update_page_form_field_values(page, label_map, auto_regenerate=False)
 
-
-
-    output = io.BytesIO()
-    writer.write(output)
+    out = io.BytesIO()
+    writer.write(out)
 
     return Response(
-        content=output.getvalue(),
+        content=out.getvalue(),
         media_type="application/pdf",
         headers={"Content-Disposition": 'attachment; filename="debug_labeled.pdf"'}
     )
+
+# 3) ENDPOINT: diligenciar el PDF según módulo
+@app.post("/generate")
+async def generate(
+    module: str = Form(...),  # EJECUTIVOS o CONTACT_CENTER
+    file: UploadFile = File(...)
+):
+    module = (module or "").upper().strip()
+    if module not in ("EJECUTIVOS", "CONTACT_CENTER"):
+        raise HTTPException(status_code=400, detail="module debe ser EJECUTIVOS o CONTACT_CENTER")
+
+    rep = ANDES["rep_principal"] if module == "EJECUTIVOS" else ANDES["rep_suplente"]
+
+    raw = await file.read()
+    reader = PdfReader(io.BytesIO(raw))
+    pdf_fields = reader.get_fields() or {}
+    if not pdf_fields:
+        raise HTTPException(status_code=400, detail="Este PDF no tiene campos de formulario.")
+
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+
+    acro = reader.trailer["/Root"].get("/AcroForm")
+    if acro:
+        writer._root_object.update({NameObject("/AcroForm"): acro})
+
+    ensure_need_appearances(writer)
+
+    # ✅ MVP: llenado de prueba (para confirmar que YA escribe en el PDF)
+    # Luego hacemos el mapeo real "campo -> dato correcto".
+    fill_map = {}
+    for k in pdf_fields.keys():
+        if k.startswith("Text"):
+            fill_map[k] = ANDES["empresa_nombre"]  # por ahora llena para validar
+    # ejemplo: ponemos representante en un campo específico si existe
+    if "Text10" in pdf_fields:
+        fill_map["Text10"] = rep
+    if "Text11" in pdf_fields:
+        fill_map["Text11"] = ANDES["nit"]
+    if "Text12" in pdf_fields:
+        fill_map["Text12"] = ANDES["email"]
+    if "Text13" in pdf_fields:
+        fill_map["Text13"] = ANDES["telefono"]
+
+    for page in writer.pages:
+        writer.update_page_form_field_values(page, fill_map, auto_regenerate=False)
+
+    out = io.BytesIO()
+    writer.write(out)
+
+    return Response(
+        content=out.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="ANDES_{module}.pdf"'}
+    )
+
+
 
 
 
