@@ -192,10 +192,15 @@ async def debug_label(file: UploadFile = File(...)):
     label_map = {k: (k[:28]) for k in fields.keys()}
 
     for page in writer.pages:
-    try:
-        writer.update_page_form_field_values(page, label_map, auto_regenerate=False)
-    except TypeError:
-        writer.update_page_form_field_values(page, label_map)
+        try:
+            writer.update_page_form_field_values(
+                page,
+                label_map,
+                auto_regenerate=False
+            )
+        except TypeError:
+            writer.update_page_form_field_values(page, label_map)
+
 
 
     output = io.BytesIO()
@@ -206,4 +211,5 @@ async def debug_label(file: UploadFile = File(...)):
         media_type="application/pdf",
         headers={"Content-Disposition": 'attachment; filename="debug_labeled.pdf"'}
     )
+
 
