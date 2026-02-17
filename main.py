@@ -139,3 +139,46 @@ async def generate(
             "Content-Disposition": f'attachment; filename="{out_name}"'
         }
     )
+from fastapi.responses import JSONResponse
+import io
+from pypdf import PdfReader, PdfWriter
+
+@app.post("/fields")
+async def fields(file: UploadFile = File(...)):
+    raw = await file.read()
+    reader = PdfReader(io.BytesIO(raw))
+    f = reader.get_fields() or {}
+    return {"count": len(f), "fields": list(f.keys())}
+
+@app.post("/debug/label")
+async def debug_label(file: UploadFile = File(...)):
+    raw = await file.read()
+    reader = PdfReader(io.BytesIO(raw))
+    writer = PdfWriter()
+
+    for page in reader.pages:
+        writer.add_page(page)
+
+    if reader.trailer["/Root"].get("/AcroForm"):
+        writer._root_object.update({"/AcroForm": reader.trailer["/Root"]["/AcroForm"]})
+
+    fields = reader.get_fields() or {}
+
+    if not fields:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Este PDF no tiene campos de formulario"}
+        )
+
+    for page in writer.pages:
+        writer.update_page_form_field_values(page, {k: k for k in fields.keys()})
+
+    output = io.BytesIO()
+    writer.write(output)
+
+    return Response(
+        content=output.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=debug_labeled.pdf"}
+    )
+
