@@ -7,4 +7,5 @@ docxtpl>=0.17.0
 fastapi
 uvicorn
 python-multipart
-pypdf>=4.2.0
+pypdf>=5.0.0
+
