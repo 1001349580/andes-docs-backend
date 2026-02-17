@@ -143,6 +143,19 @@ from fastapi.responses import JSONResponse
 import io
 from pypdf import PdfReader, PdfWriter
 
+import io
+from fastapi.responses import Response, JSONResponse
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import NameObject, BooleanObject
+
+def _ensure_need_appearances(writer: PdfWriter):
+    try:
+        if "/AcroForm" in writer._root_object:
+            acro = writer._root_object["/AcroForm"]
+            acro.update({NameObject("/NeedAppearances"): BooleanObject(True)})
+    except Exception:
+        pass
+
 @app.post("/fields")
 async def fields(file: UploadFile = File(...)):
     raw = await file.read()
@@ -154,24 +167,32 @@ async def fields(file: UploadFile = File(...)):
 async def debug_label(file: UploadFile = File(...)):
     raw = await file.read()
     reader = PdfReader(io.BytesIO(raw))
-    writer = PdfWriter()
-
-    for page in reader.pages:
-        writer.add_page(page)
-
-    if reader.trailer["/Root"].get("/AcroForm"):
-        writer._root_object.update({"/AcroForm": reader.trailer["/Root"]["/AcroForm"]})
-
     fields = reader.get_fields() or {}
 
     if not fields:
         return JSONResponse(
             status_code=400,
-            content={"detail": "Este PDF no tiene campos de formulario"}
+            content={"detail": "Este PDF no tiene campos de formulario (no es rellenable)."}
         )
 
+    writer = PdfWriter()
+
+    # Copiar páginas
+    for page in reader.pages:
+        writer.add_page(page)
+
+    # Copiar AcroForm si existe
+    acro = reader.trailer["/Root"].get("/AcroForm")
+    if acro:
+        writer._root_object.update({NameObject("/AcroForm"): acro})
+
+    _ensure_need_appearances(writer)
+
+    # Llenar cada campo con su propio nombre (corto para que quepa)
+    label_map = {k: (k[:28]) for k in fields.keys()}
+
     for page in writer.pages:
-        writer.update_page_form_field_values(page, {k: k for k in fields.keys()})
+        writer.update_page_form_field_values(page, label_map)
 
     output = io.BytesIO()
     writer.write(output)
@@ -179,6 +200,5 @@ async def debug_label(file: UploadFile = File(...)):
     return Response(
         content=output.getvalue(),
         media_type="application/pdf",
-        headers={"Content-Disposition": "attachment; filename=debug_labeled.pdf"}
+        headers={"Content-Disposition": 'attachment; filename="debug_labeled.pdf"'}
     )
-
